@@ -25,7 +25,7 @@ options(readr.show_col_types = FALSE)
 file_path <- "data/shared/TPSai+–+Prolific_CFA+Eval+Demog.csv"
 raw_data  <- read_csv(file_path, n_max = 2)
 colnames  <- names(raw_data)
-raw_data  <- read_csv(file_path, col_names = colnames, skip = 2)
+raw_data  <- read_csv(file_path, col_names = colnames, skip = 1)
 ```
 
 ```{r}
@@ -99,7 +99,7 @@ We also decided to test an additional model, that is a bi-factor model with a si
 ```{r}
 comp_items    <- sprintf("TPSAI_%02d", c(1:9))
 affect_items  <- sprintf("TPSAI_%02d", c(10:15))
-rv_items      <- sprintf("TPSAI_%02d", 16:25)
+rv_items      <- sprintf("TPSAI_%02d", 16:23)
 rs_items      <- sprintf("TPSAI_%02d", 26:30)
 
 item_map <- bind_rows(
@@ -442,9 +442,11 @@ plot_loadings <- function(loadings, by_factor = FALSE) {
               aes(label = label, colour = abs(loading) > 0.5),
               fontface = "bold") +
     scale_colour_manual(values = c("TRUE" = "white", "FALSE" = "black"), guide = "none") +
-    scale_fill_gradient2(low = "blue", mid = "white", high = "red",
-                         midpoint = 0, limits = c(-1, 1),
-                         oob = scales::squish) +
+    # Colorblind-friendly diverging palette
+    scale_fill_distiller(palette = "RdYlBu", direction = -1,
+                         limits = c(-1, 1),
+                         oob = scales::squish,
+                         guide = guide_colorbar(title = "Loading")) +
     scale_y_discrete(limits = rev) +
     theme_minimal(base_size = 14) +
     theme(legend.position = "right") +
@@ -465,7 +467,7 @@ m3_loadings <- lavaan::standardizedSolution(m3, type = "std.all") |>
   as.matrix()
 ```
 
-```{r, fig.height=8, fig.width=6}
+```{r, fig.height=8, fig.width=7}
 plot_loadings(m3_loadings)
 ```
 

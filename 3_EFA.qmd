@@ -212,7 +212,7 @@ plot_loadings <- function(loadings, by_factor = FALSE) {
     group_by(item) |>
     mutate(
       bold     = abs(loading) == max(abs(loading)),
-      dom_fac  = factor[which.max(abs(loading))],   # which factor it loads on most
+      dom_fac  = factor[which.max(abs(loading))],
       dom_load = loading[which.max(abs(loading))],
       label    = as.character(round(loading, 2))
     ) |>
@@ -221,28 +221,35 @@ plot_loadings <- function(loadings, by_factor = FALSE) {
   if (by_factor) {
     item_order <- loads |>
       distinct(item, dom_fac, dom_load) |>
-      arrange(dom_fac, desc(abs(dom_load))) |>     # group by factor, then by strength
+      arrange(dom_fac, desc(abs(dom_load))) |>
       pull(item)
     loads <- mutate(loads, item = factor(item, levels = item_order))
   } else {
-    loads <- mutate(loads, item = factor(item))    # original alphabetical behaviour
+    loads <- mutate(loads, item = factor(item))
   }
   
   ggplot(loads, aes(x = factor, y = item, fill = loading)) +
-    geom_tile() +
+    geom_tile(colour = "white", linewidth = 0.3) +
     geom_text(data = filter(loads, !bold),
-              aes(label = label, colour = abs(loading) > 0.5)) +
+              aes(label = label, colour = abs(loading) > 0.5),
+              size = 4) +
     geom_text(data = filter(loads, bold),
               aes(label = label, colour = abs(loading) > 0.5),
-              fontface = "bold") +
+              fontface = "bold",
+              size = 4) +
     scale_colour_manual(values = c("TRUE" = "white", "FALSE" = "black"), guide = "none") +
-    scale_fill_gradient2(low = "blue", mid = "white", high = "red",
-                         midpoint = 0, limits = c(-1, 1),
-                         oob = scales::squish) +
+    # Colorblind-friendly diverging palette
+    scale_fill_distiller(palette = "RdYlBu", direction = -1,
+                         limits = c(-1, 1),
+                         oob = scales::squish,
+                         guide = guide_colorbar(title = "Loading")) +
     scale_y_discrete(limits = rev) +
-    theme_minimal(base_size = 14) +
-    theme(legend.position = "right") +
-    labs(x = "", y = "", fill = "")
+    theme_minimal(base_size = 12) +
+    theme(
+      legend.position = "right",
+      panel.grid = element_blank()
+    ) +
+    labs(x = "", y = "", fill = "Loading")
 }
 ```
 
@@ -404,7 +411,7 @@ compare_omega(list(omega_trust_2, omega_trust_3, omega_trust_4)) |> kable()
 ```
 
 ```{r}
-#| fig-width: 4
+#| fig-width: 3
 #| fig-height: 4
 sl_subset <- omega_trust_2$schmid$sl[, c("F1*", "F2*")]
 plot_loadings(sl_subset)

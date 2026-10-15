@@ -1,0 +1,629 @@
+---
+title: "Exploratory Analysis for Future Work"
+author: "Riccardo Volpato"
+format:
+  html:
+    embed-resources: true
+    toc: true
+editor: visual
+bibliography: references.bib
+execute:
+  message: false
+  warning: false
+---
+
+# Data processing
+
+```{r}
+library(tidyverse)
+library(knitr)
+library(psych)
+```
+
+```{r}
+options(readr.show_col_types = FALSE)
+file_path <- "data/shared/TPSai+–+Prolific_CFA+Eval+Demog.csv"
+raw_data  <- read_csv(file_path, n_max = 2)
+colnames  <- names(raw_data)
+q_text    <- setNames(sub(".* - ", "", as.character(raw_data[1, ])), colnames)
+raw_data  <- read_csv(file_path, col_names = colnames, skip = 1)
+```
+
+```{r}
+questions_map <- read_csv("surveys/cfa_qs.csv")
+cols_tpsai_raw  <- sprintf("TPSAI_%d", seq_len(nrow(questions_map)))
+```
+
+```{r}
+questions_map |> kable()
+```
+
+```{r}
+likert_levels <- c(
+  "Strongly disagree"          = 1,
+  "Disagree"                   = 2,
+  "Somewhat disagree"          = 3,
+  "Neither agree nor disagree" = 4,
+  "Somewhat agree"             = 5,
+  "Agree"                      = 6,
+  "Strongly agree"             = 7
+)
+
+likert_levels_5 <- c(
+  "Strongly disagree"          = 1,
+  "Disagree"                   = 2,
+  "Neither agree nor disagree" = 3,
+  "Agree"                      = 4,
+  "Strongly agree"             = 5
+)
+
+overall_levels <- c(
+  "Not at all"  = 1, 
+  "Very little" = 2, 
+  "A little"    = 3,
+  "Moderately"  = 4, 
+  "Quite a bit" = 5, 
+  "Very much"   = 6,
+  "Completely"  = 7
+)
+
+freq_levels <- c(
+  "Never",
+  "About once a month",
+  "About once a week to a few times a month",
+  "Several times a week",
+  "Daily or multiple times a day"
+)
+```
+
+```{r}
+cols_tpsai <- gsub("^TPSAI_(\\d)$", "TPSAI_0\\1", cols_tpsai_raw)
+comp_items    <- sprintf("TPSAI_%02d", c(1:9))
+affect_items  <- sprintf("TPSAI_%02d", c(10:15))
+risk_items      <- sprintf("TPSAI_%02d", 16:25)
+relScept_items      <- sprintf("TPSAI_%02d", 26:30)
+
+item_map <- bind_rows(
+  tibble(item = comp_items,   top = "Motivations",    sub = "Competence"),
+  tibble(item = affect_items, top = "Motivations",    sub = "Affective"),
+  tibble(item = risk_items,     top = "Concerns", sub = "RiskVigilance"),
+  tibble(item = relScept_items,     top = "Concerns", sub = "RelationalScepticism")
+) |>
+  arrange(item)
+
+item_map <- item_map |>
+  mutate(sub3 = if_else(top == "Motivations", "Motivations", sub))
+
+trust_items    <- item_map |> filter(top == "Motivations")    |> pull(item)
+distrust_items <- item_map |> filter(top == "Concerns") |> pull(item)
+```
+
+```{r}
+ptt_items <- sprintf("PTT_%d", 1:6)
+etmcq_items <- sprintf("ETMCQ_%d", 1:15)
+gaid_items <- sprintf("GAID_%d", 1:11)
+
+eval_data <- raw_data |>
+  mutate(across(all_of(cols_tpsai_raw), ~ likert_levels[.x])) |>
+  mutate(across(all_of(etmcq_items), ~ likert_levels[.x])) |>
+  mutate(across(all_of(gaid_items), ~ likert_levels_5[.x])) |>
+  mutate(across(all_of(ptt_items), ~ likert_levels_5[.x])) |>
+  rename(all_of(setNames(cols_tpsai_raw, cols_tpsai))) |>
+  mutate(
+    motivations_score = rowMeans(across(all_of(trust_items))),
+    concerns_score = rowMeans(across(all_of(risk_items))),
+    rel_scept_score = rowMeans(across(all_of(relScept_items)))
+  ) |>
+  mutate(
+    frequency_level = factor(FREQ, levels = freq_levels, ordered = TRUE),
+    frequency_level = as.integer(frequency_level),
+    trust_level   = overall_levels[TR],
+    distrust_level   = overall_levels[DT]
+  ) |>
+  mutate(platform = 
+           coalesce(`PLAT-PSY_11_TEXT`, `PLAT-PSY`, `PLAT-GEN_11_TEXT`, `PLAT-GEN`)) |>
+  select(
+    all_of(cols_tpsai), motivations_score, concerns_score, rel_scept_score,
+    frequency_level, trust_level, distrust_level, 
+    all_of(ptt_items), all_of(etmcq_items), all_of(gaid_items),
+    `PSY-FREQ`, `PSY-SAT`, platform, Age)
+```
+
+# Items and factors plots
+
+```{r, fig.width=15, fig.height=16}
+p <- eval_data |>
+  select(frequency_level, all_of(cols_tpsai)) |>
+  filter(!is.na(frequency_level)) |>
+  pivot_longer(-frequency_level, names_to = "item", values_to = "response") |>
+  mutate(
+    factor = case_when(
+      item %in% trust_items ~ "Motivations",
+      item %in% risk_items ~ "Concerns",
+      item %in% relScept_items ~ "Relational Scepticism",
+      .default = NA_character_
+    ),
+    factor = factor(factor, levels = c("Motivations", "Concerns", "Relational Scepticism")),
+    frequency_level = factor(frequency_level, levels = 1:5, labels = paste("Frequency", 1:5))
+  ) |>
+  ggplot(aes(x = item, y = response, fill = factor)) +
+  geom_boxplot(alpha = 0.7) +
+  facet_wrap(~ frequency_level, ncol = 1) +
+  scale_fill_manual(values = c(
+    "Motivations" = "#0072B2",
+    "Concerns" = "#E69F00",
+    "Relational Scepticism" = "#009E73"
+  )) +
+  scale_y_continuous(limits = c(1, 7), breaks = c(1, 4, 7)) +
+  labs(x = "", y = "Response", fill = "Factor") +
+  theme_minimal() +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    legend.position = "bottom"
+  )
+
+p
+```
+
+```{r, fig.width=7, fig.height=11}
+heat <- eval_data |>
+  select(frequency_level, all_of(cols_tpsai)) |>
+  filter(!is.na(frequency_level)) |>
+  pivot_longer(-frequency_level, names_to = "item", values_to = "response") |>
+  mutate(
+    factor = case_when(
+      item %in% trust_items ~ "Motivations",
+      item %in% risk_items ~ "Concerns",
+      item %in% relScept_items ~ "Relational Scepticism",
+      .default = NA_character_
+    ),
+    factor = factor(factor, levels = c("Motivations", "Concerns", "Relational Scepticism"))
+  ) |>
+  group_by(frequency_level, item, factor) |>
+  summarise(mean = mean(response, na.rm = TRUE), .groups = "drop") |>
+  ggplot(aes(x = factor(frequency_level), y = forcats::fct_rev(item), fill = mean)) +
+  geom_tile(colour = "white") +
+  geom_text(aes(label = round(mean, 1)), size = 3, colour = "white") +
+  facet_grid(factor ~ ., scales = "free_y", space = "free_y", switch = "y") +
+  scale_fill_viridis_c(limits = c(1, 7), breaks = 1:7) +
+  scale_x_discrete(position = "top") +
+  labs(x = "Frequency level", y = "", fill = "Mean\nresponse") +
+  theme_minimal() +
+  theme(
+    panel.grid = element_blank(),
+    strip.placement = "outside",
+    strip.text.y.left = element_text(angle = 90, face = "bold")
+  )
+
+heat
+```
+
+# Clustering
+
+```{r, message = FALSE}
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(ggrepel)
+library(cluster)
+library(mclust)
+library(plotly)
+library(patchwork)
+```
+
+```{r}
+fmt_p <- function(p) ifelse(p < .001, "<.001", sprintf("%.3f", p))
+```
+
+```{r}
+X_all <- eval_data |>
+  select(motivations_score, concerns_score, rel_scept_score) |>
+  as.matrix()
+rownames(X_all) <- seq_len(nrow(X_all))
+```
+
+## Filtering non-users
+
+```{r}
+groups_all <- cutree(hclust(dist(X_all), method = "ward.D2"), k = 3)
+
+table(groups_all)
+aggregate(X_all, by = list(cluster = groups_all), FUN = function(x) round(mean(x), 2))
+```
+
+Ward clustering of the full sample gives three profiles ordered along a single gradient:
+
+1.  motivated with lower concerns
+
+2.  motivated but also concerned and sceptical
+
+3.  low motivations with high concerns and scepticism
+
+```{r}
+all_cols <- c("1" = "#1b9e77", "2" = "#d95f02", "3" = "#7570b3")
+
+as.data.frame(X_all) |>
+  mutate(cluster = factor(groups_all), id = rownames(X_all)) |>
+  plot_ly(
+    x = ~motivations_score, y = ~concerns_score, z = ~rel_scept_score,
+    color = ~cluster, colors = all_cols,
+    type = "scatter3d", mode = "markers",
+    marker = list(size = 3, opacity = 0.8),
+    text = ~paste0("ID: ", id,
+                   "<br>Motivations: ", round(motivations_score, 2),
+                   "<br>Concerns: ", round(concerns_score, 2),
+                   "<br>Scepticism: ", round(rel_scept_score, 2),
+                   "<br>Cluster: ", cluster),
+    hoverinfo = "text"
+  ) |>
+  layout(
+    scene = list(xaxis = list(title = "Motivations"),
+                 yaxis = list(title = "Concerns"),
+                 zaxis = list(title = "Scepticism")),
+    legend = list(title = list(text = "Cluster"))
+  )
+```
+
+The three clusters sit next to each other along a curved band with no gaps between them. Cluster 3 (purple) is concentrated at high scepticism and low motivations, with many respondents at the scepticism ceiling.
+
+```{r, fig.width = 8, fig.height = 4}
+freq_levels <- c("Never", "Monthly", "Weekly", "Several times a week", "Daily")
+
+eval_data |>
+  mutate(cluster   = factor(groups_all),
+         frequency = factor(frequency_level, levels = 1:5, labels = freq_levels)) |>
+  filter(!is.na(frequency)) |>
+  dplyr::count(cluster, frequency) |>
+  group_by(cluster) |>
+  mutate(prop = n / sum(n)) |>
+  ggplot(aes(cluster, prop, fill = frequency)) +
+  geom_col(colour = "white") +
+  scale_fill_viridis_d(option = "mako", end = 0.9) +
+  scale_y_continuous(labels = scales::percent) +
+  labs(x = "Full-sample cluster", y = "Share of cluster", fill = "Frequency") +
+  coord_flip() +
+  theme_minimal()
+```
+
+```{r}
+eval_data |>
+  mutate(cluster = factor(groups_all)) |>
+  filter(!is.na(frequency_level)) |>
+  group_by(cluster) |>
+  summarise(n         = n(),
+            non_users = sum(frequency_level == 1),
+            pct       = sprintf("%.0f%%", 100 * non_users / n)) |>
+  knitr::kable()
+
+non_user <- eval_data$frequency_level == 1
+mean(groups_all[which(non_user)] == 3)
+```
+
+Cluster 3 is made up mostly of non-users: 68% of its members never use generative AI for psychological support, compared with 21% of cluster 2 and 7% of cluster 1. In the full sample, the sceptical end of the gradient therefore largely reflects not using AI for support at all, rather than a distinct attitude among people who do.
+
+Non-users are excluded from the rest of the analysis for several reasons:
+
+- the analysis that follows asks whether there are distinct attitude profiles among people who actually use AI for psychological support
+
+- including non-users would confound differences in attitudes with differences in use, which matters most for the dependency outcomes compared below
+
+- most TPSai items describe experiences of using AI for support (for example, "I feel calmer when I talk to the AI while distressed"), so non-users' answers are hypothetical rather than based on experience
+
+```{r}
+users  <- which(eval_data$frequency_level > 1)
+u_data <- eval_data[users, ]
+X      <- X_all[users, ]
+
+nrow(X)
+```
+
+## No standardisation needed
+
+```{r}
+round(apply(X, 2, sd), 2)
+```
+
+Ward clustering uses Euclidean distances, so a score with a larger spread has more influence on which respondents are grouped together. The standard deviations among users are similar, so no single score dominates the distances.
+
+```{r}
+round(cor(X), 2)
+```
+
+Concerns and scepticism are strongly correlated, and motivations is negatively correlated with both. The scores share a common structure rather than measuring three unrelated things.
+
+All three scores are measured on the same 1–7 response scale, so a one-point difference has the same meaning on each, and the clusters can be described directly in scale points. The raw scores are therefore kept, and a standardised solution is included as a robustness check.
+
+## Clusters
+
+```{r}
+d  <- dist(X)
+hc <- hclust(d, method = "ward.D2")
+
+plot(hc, labels = FALSE, hang = -1,
+     main = "Ward hierarchical clustering (users)", xlab = "", sub = "")
+```
+
+The largest gap in merge heights falls between the final merge (around 29) and the next one down (around 16), supporting two clusters. Below that, merges at around 16, 13, 9.5 and 8.7 are evenly spaced, so no further cut stands out.
+
+```{r}
+data.frame(
+  k       = 2:6,
+  avg_sil = sapply(2:6, function(kk)
+    round(summary(silhouette(cutree(hc, kk), d))$avg.width, 3))
+)
+```
+
+Average silhouette width is highest for two clusters (0.36) and drops clearly for three (0.28), close to the level usually treated as negligible structure. Two clusters are retained.
+
+```{r}
+k <- 2
+groups <- cutree(hc, k = k)
+```
+
+## Profiles
+
+```{r}
+table(groups)
+aggregate(X, by = list(cluster = groups), FUN = function(x) round(mean(x), 2))
+```
+
+The two clusters correspond to two profiles of users:
+
+1.  **Confident (green):** motivated, with moderate concerns and scepticism
+2.  **Cautious (orange):** still motivated, but with high concerns and scepticism
+
+Both groups score above the scale midpoint on motivations. What separates them is concerns and scepticism, which differ by more than twice as much as motivations.
+
+```{r}
+profile_labels <- c("Confident", "Cautious")
+cluster_cols   <- c("Confident" = "#1b9e77", "Cautious" = "#d95f02")
+```
+
+```{r, fig.width = 10, fig.height = 5}
+score_panel <- function(df, y, y_label, cols, legend_title) {
+  ggplot(df, aes(motivations_score, .data[[y]], colour = cluster)) +
+    geom_point(alpha = 0.7, size = 1.8) +
+    scale_colour_manual(values = cols) +
+    scale_x_continuous(breaks = 1:7) +
+    scale_y_continuous(breaks = 1:7) +
+    coord_equal(xlim = c(1, 7), ylim = c(1, 7)) +
+    labs(x = "Motivations", y = y_label, colour = legend_title) +
+    theme_minimal()
+}
+
+cluster_f <- factor(groups, levels = 1:2, labels = profile_labels)
+users_df  <- as.data.frame(X) |> mutate(cluster = cluster_f)
+
+score_panel(users_df, "concerns_score", "Concerns", cluster_cols, "Profile") +
+  score_panel(users_df, "rel_scept_score", "Scepticism", cluster_cols, "Profile") +
+  plot_layout(guides = "collect") +
+  plot_annotation(title = "Attitude profiles of users")
+```
+
+The boundary between the profiles runs mainly along the concerns and scepticism axes rather than along motivations.
+
+```{r}
+as.data.frame(X) |>
+  mutate(cluster = cluster_f, id = rownames(X)) |>
+  plot_ly(
+    x = ~motivations_score, y = ~concerns_score, z = ~rel_scept_score,
+    color = ~cluster, colors = cluster_cols,
+    type = "scatter3d", mode = "markers",
+    marker = list(size = 3, opacity = 0.8),
+    text = ~paste0("ID: ", id,
+                   "<br>Motivations: ", round(motivations_score, 2),
+                   "<br>Concerns: ", round(concerns_score, 2),
+                   "<br>Scepticism: ", round(rel_scept_score, 2),
+                   "<br>Profile: ", cluster),
+    hoverinfo = "text"
+  ) |>
+  layout(
+    title = "Attitude profiles of users",
+    scene = list(
+      xaxis = list(title = "Motivations", range = c(1, 7)),
+      yaxis = list(title = "Concerns", range = c(1, 7)),
+      zaxis = list(title = "Scepticism", range = c(1, 7)),
+      aspectmode = "cube"
+    ),
+    legend = list(title = list(text = "Profile"))
+  )
+```
+
+## Continuum vs groups
+
+```{r}
+pca <- prcomp(X, center = TRUE, scale. = FALSE)
+ve  <- round(100 * pca$sdev^2 / sum(pca$sdev^2), 1)
+
+arrow_scale <- 0.8 * max(abs(pca$x[, 1:2])) / max(abs(pca$rotation[, 1:2]))
+load_df <- data.frame(
+  var = c("M", "C", "S"),
+  PC1 = pca$rotation[, 1] * arrow_scale,
+  PC2 = pca$rotation[, 2] * arrow_scale
+)
+
+ggplot(data.frame(pca$x[, 1:2], cluster = cluster_f),
+       aes(PC1, PC2, colour = cluster)) +
+  geom_point(alpha = 0.7, size = 1.8) +
+  geom_segment(data = load_df, aes(0, 0, xend = PC1, yend = PC2),
+               inherit.aes = FALSE, colour = "grey20",
+               arrow = arrow(length = unit(0.25, "cm"))) +
+  geom_text_repel(data = load_df, aes(PC1 * 1.12, PC2 * 1.12, label = var),
+                  inherit.aes = FALSE, colour = "grey20", size = 3.5) +
+  scale_colour_manual(values = cluster_cols) +
+  labs(x = paste0("PC1 (", ve[1], "%)"), y = paste0("PC2 (", ve[2], "%)"),
+       colour = "Profile") +
+  coord_equal() +
+  theme_minimal()
+```
+
+The two profiles sit side by side along the first principal component, with no gap between them.
+
+```{r}
+hist(pca$x[, 1], breaks = 40, main = "PC1 scores (users)", xlab = "PC1")
+```
+
+PC1 scores have a single hump rather than two, so the profiles are best understood as two regions of a continuum rather than discrete types. Together with the modest silhouette width (0.36), the profiles are presented as a descriptive summary of where users sit on that continuum.
+
+## Robustness
+
+```{r}
+table(full_sample = groups_all[users], users = groups)
+```
+
+The users-only solution closely reproduces the full-sample structure. All users from full-sample cluster 1 fall into the confident profile, and all users from full-sample cluster 3 join the cautious profile, together with almost all users from cluster 2. Only 13 of 268 users cross the boundary. The distinction between confident and cautious users therefore reappears almost unchanged when clustering is rerun from scratch on a different sample, while the full-sample boundary between clusters 2 and 3 disappears once non-users are excluded.
+
+```{r}
+set.seed(1)
+methods <- list(
+  ward        = groups,
+  ward_scaled = cutree(hclust(dist(scale(X)), method = "ward.D2"), k = k),
+  kmeans      = kmeans(X, centers = k, nstart = 50)$cluster,
+  pam         = pam(X, k = k)$clustering,
+  gmm         = Mclust(X, G = k, verbose = FALSE)$classification
+)
+
+ari <- outer(names(methods), names(methods), Vectorize(function(a, b)
+  adjustedRandIndex(methods[[a]], methods[[b]])))
+dimnames(ari) <- list(names(methods), names(methods))
+round(ari, 2)
+```
+
+The adjusted Rand index shows how closely each pair of methods agrees, from 0 (chance) to 1 (identical). The first row shows how closely each alternative reproduces the Ward solution.
+
+## Profile differences
+
+```{r}
+u_data <- u_data |>
+  mutate(cluster   = cluster_f,
+         frequency = factor(frequency_level, levels = 2:5, labels = freq_levels[2:5]))
+```
+
+### Usage frequency
+
+```{r, fig.width = 8, fig.height = 3}
+u_data |>
+  dplyr::count(cluster, frequency) |>
+  group_by(cluster) |>
+  mutate(prop = n / sum(n)) |>
+  ggplot(aes(cluster, prop, fill = frequency)) +
+  geom_col(colour = "white") +
+  scale_fill_viridis_d(option = "mako", begin = 0.25, end = 0.9) +
+  scale_y_continuous(labels = scales::percent) +
+  labs(x = "Profile", y = "Share of profile", fill = "Frequency") +
+  coord_flip() +
+  theme_minimal()
+```
+
+```{r}
+u_data |>
+  dplyr::count(cluster, frequency, .drop = FALSE) |>
+  group_by(cluster) |>
+  mutate(pct = sprintf("%.0f%%", 100 * n / sum(n))) |>
+  select(-n) |>
+  pivot_wider(names_from = frequency, values_from = pct) |>
+  knitr::kable()
+```
+
+Frequency is ordinal, so it is shown as the share of each profile at each level rather than as a mean. Each row sums to 100%.
+
+```{r}
+f1 <- as.integer(u_data$frequency[u_data$cluster == "Confident"])
+f2 <- as.integer(u_data$frequency[u_data$cluster == "Cautious"])
+wt <- wilcox.test(f1, f2, exact = FALSE)
+
+tibble(
+  W          = unname(wt$statistic),
+  p          = fmt_p(wt$p.value),
+  r_rb       = round(2 * unname(wt$statistic) / (sum(!is.na(f1)) * sum(!is.na(f2))) - 1, 2)
+) |>
+  knitr::kable()
+```
+
+The Wilcoxon rank-sum test compares frequency between the two profiles without treating the categories as equally spaced. The rank-biserial correlation (r_rb) is the effect size: it ranges from −1 to 1, and positive values mean confident users use AI for support more often.
+
+**Confident users use AI for support considerably more often.** 68% of them use it several times a week or daily, compared with 40% of cautious users. Cautious users are spread fairly evenly from monthly to daily, with the largest shares at monthly and weekly (30% each). The rank-biserial correlation of 0.32 is a moderate effect.
+
+### Generative AI dependency (GAID)
+
+GAID measures three facets of dependency on generative AI: cognitive preoccupation (persistent mental engagement and urges to use it), negative consequences (concerns about reliance, reduced performance and self-efficacy) and withdrawal (distress when access is restricted). Items are rated on a 5-point scale. Factor scores are the mean of their items, and the overall score is the mean of the three factor scores.
+
+GAID asks about generative AI in general, not about its use for psychological support specifically, so it is used here as a proxy. Dependency on AI for psychological support may differ and is left for qualitative exploration.
+
+```{r, fig.width = 11, fig.height = 4.5}
+gaid_map <- tibble(
+  item   = sprintf("GAID_%d", 1:11),
+  factor = rep(c("GAID_CogPre", "GAID_NegCons", "GAID_Withdrawal"),
+               times = c(3, 4, 4))
+)
+
+gaid_scores <- sapply(split(gaid_map$item, gaid_map$factor),
+                      function(items) rowMeans(u_data[, items]))
+
+gaid_long <- as.data.frame(gaid_scores) |>
+  mutate(GAID_Overall = rowMeans(across(everything())),
+         cluster      = cluster_f) |>
+  pivot_longer(-cluster, names_to = "measure", values_to = "score") |>
+  mutate(measure = factor(measure,
+    levels = c("GAID_Overall", "GAID_CogPre", "GAID_NegCons", "GAID_Withdrawal"),
+    labels = c("Overall", "Cognitive preoccupation",
+               "Negative consequences", "Withdrawal")))
+
+ggplot(gaid_long, aes(cluster, score, fill = cluster)) +
+  geom_violin(alpha = 0.4, colour = NA, na.rm = TRUE) +
+  geom_boxplot(width = 0.15, outlier.shape = NA, fill = "white", na.rm = TRUE) +
+  stat_summary(fun = mean, geom = "point", shape = 23, size = 2.5,
+               fill = "black", na.rm = TRUE) +
+  facet_wrap(~ measure, nrow = 1) +
+  scale_fill_manual(values = cluster_cols, guide = "none") +
+  scale_y_continuous(limits = c(1, 5), breaks = 1:5) +
+  labs(x = "Profile", y = "Score (1–5)") +
+  theme_minimal()
+```
+
+```{r}
+gaid_long |>
+  group_by(measure) |>
+  group_modify(~ {
+    a  <- .x$score[.x$cluster == "Confident"]
+    b  <- .x$score[.x$cluster == "Cautious"]
+    a  <- a[!is.na(a)]
+    b  <- b[!is.na(b)]
+    tt <- t.test(a, b, var.equal = FALSE)
+    sp <- sqrt(((length(a) - 1) * var(a) + (length(b) - 1) * var(b)) /
+                 (length(a) + length(b) - 2))
+    tibble(
+      Confident   = sprintf("%.2f (%.2f)", mean(a), sd(a)),
+      Cautious = sprintf("%.2f (%.2f)", mean(b), sd(b)),
+      `t (df)`   = sprintf("%.2f (%.0f)", tt$statistic, tt$parameter),
+      p          = tt$p.value,
+      d          = round((mean(a) - mean(b)) / sp, 2)
+    )
+  }) |>
+  ungroup() |>
+  mutate(p = fmt_p(p.adjust(p, method = "holm"))) |>
+  rename(Measure = measure) |>
+  knitr::kable()
+```
+
+Each row compares the two profiles on one GAID score. The profile columns give the mean (SD). The t statistic comes from Welch's t-test, which does not assume equal variances, and p-values are Holm-adjusted across the four scores. Cohen's d is the standardised difference in means: positive values mean confident users score higher, and values around 0.2, 0.5 and 0.8 are conventionally read as small, medium and large.
+
+Confident users scored higher than cautious users on overall dependency (d = 0.40), cognitive preoccupation (d = 0.57) and withdrawal (d = 0.45), all small-to-medium differences that remained significant after Holm correction. The two profiles did not differ on negative consequences (2.13 in both groups, d = 0.00). One reading is that TPSai concerns are mainly about AI as a mental-health tool rather than about the effects of one's own use. Dependency was low in both profiles, with most means around 2 on the 1–5 scale, so these are differences between low levels of dependency rather than between dependent and non-dependent users.
+
+Confident users use AI for support more often, and dependency is likely to increase with use, so the profile differences in GAID scores may partly reflect frequency of use rather than attitudes. Each GAID score is therefore regressed on profile and usage frequency together. The estimate is the difference between cautious and confident users at the same frequency of use, so negative values mean confident users score higher. The p-values are not adjusted for multiple comparisons.
+
+```{r}
+gaid_wide <- as.data.frame(gaid_scores) |>
+  mutate(GAID_Overall = rowMeans(across(everything())),
+         cluster      = cluster_f,
+         frequency    = u_data$frequency)
+
+sapply(c("GAID_Overall", "GAID_CogPre", "GAID_NegCons", "GAID_Withdrawal"), function(v) {
+  fit <- lm(reformulate(c("cluster", "frequency"), response = v), data = gaid_wide)
+  round(coef(summary(fit))["clusterCautious", c("Estimate", "Pr(>|t|)")], 3)
+})
+```
+
+Adjusting for frequency roughly halves most of the differences. Cognitive preoccupation is the only score on which the profiles still clearly differ: at the same frequency of use, confident users score about a third of a point higher (b = −0.33, p = .006), and this difference remains significant after Holm correction across the four scores. The differences in overall dependency (b = −0.13, p = .172) and withdrawal (b = −0.19, p = .074) shrink and are no longer significant, so confident users score higher on these largely because they use AI more often. For negative consequences, cautious users score slightly higher once frequency is held constant (b = 0.12, p = .289). This is the predicted direction, but the difference is small and not significant.
+
+Frequency is probably not only a confounder. More confident attitudes plausibly lead to more frequent use, which in turn leads to more dependency, so adjusting for frequency removes part of a genuine effect of the profiles. The adjusted results therefore do not show that the unadjusted differences are spurious. Rather, they suggest that the profiles' differences in dependency operate largely through how often people use generative AI, with cognitive preoccupation the one facet related to attitudes beyond frequency of use.
